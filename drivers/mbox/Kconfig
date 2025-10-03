@@ -31,6 +31,7 @@ source "drivers/mbox/Kconfig.rpi_pico"
 source "drivers/mbox/Kconfig.stm32_hsem"
 source "drivers/mbox/Kconfig.ti_omap"
 source "drivers/mbox/Kconfig.ti_secproxy"
+source "drivers/mbox/Kconfig.ti_am26x"
 source "drivers/mbox/Kconfig.xlnx"
 # zephyr-keep-sorted-stop
 

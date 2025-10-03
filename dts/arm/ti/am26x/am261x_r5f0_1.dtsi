@@ -30,3 +30,7 @@
 		/delete-node/ gpio0;
 	};
 };
+
+&mailbox0 {
+	core-id = <1>;
+};
