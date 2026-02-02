@@ -5,20 +5,19 @@
  */
 
 / {
-    chosen {
-        /* Define shared memory region for RPMsg */
-        zephyr,ipc_shm = &rpmsg_shm;
-        zephyr,ipc = &ipc0;
-    };
-
-    /* IPC (mailbox) configuration for RPMsg */
-    ipc0: ipc {
-        role = "remote";
-        status = "okay";
-    };
+	chosen {
+		/* Define shared memory region for RPMsg */
+		zephyr,ipc_shm = &rpmsg_shm;
+		zephyr,ipc = &ipc0;
+	};
 };
 
 /* Enable mailbox used for notifications */
 &mailbox0 {
-    status = "okay";
+	status = "okay";
+};
+
+&ipc0 {
+	role = "remote";
+	status = "okay";
 };
