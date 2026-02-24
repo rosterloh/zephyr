@@ -109,7 +109,9 @@ FUNC_NORETURN void z_prep_c(void)
 	z_arm_floating_point_init();
 #endif
 	arch_bss_zero();
+#if !(defined(CONFIG_XIP) && defined(CONFIG_SOC_SERIES_AM261X))
 	arch_data_copy();
+#endif
 #if ((defined(CONFIG_ARMV7_R) || defined(CONFIG_ARMV7_A)) && defined(CONFIG_INIT_STACKS))
 	z_arm_init_stacks();
 #endif
