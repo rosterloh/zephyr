@@ -21,8 +21,8 @@ manifest:
   remotes:
     - name: upstream
       url-base: https://github.com/zephyrproject-rtos
-    - name: downstream
-      url-base: https://github.com/texasInstruments
+    - name: rosterloh
+      url-base: https://github.com/rosterloh
     - name: babblesim
       url-base: https://github.com/BabbleSim
 
@@ -42,12 +42,6 @@ manifest:
       revision: 1cce925c72805cfdbb6341ca8c0755c7d42699d3
       groups:
         - babblesim
-    - name: asm-hal_ti
-      remote: downstream
-      revision: v4.2.0-ti-REL.AM13E2X.01.00.00.03
-      path: modules/hal/asm_ti
-      groups:
-        - hal
     - name: babblesim_ext_2G4_channel_NtNcable
       remote: babblesim
       repo-path: ext_2G4_channel_NtNcable
@@ -281,7 +275,8 @@ manifest:
       groups:
         - hal
     - name: hal_ti
-      revision: afbcfffd393be03ca2c9b41f9ce8d94a4c2f2fbd
+      remote: rosterloh
+      revision: 936231da9a8695d00c5d1456e8d19830f792ffed
       path: modules/hal/ti
       groups:
         - hal
