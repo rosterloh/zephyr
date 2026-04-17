@@ -566,7 +566,7 @@ static int am26x_mbox_set_enabled(const struct device *dev, uint32_t channel, bo
 }
 
 /* Define driver API structure */
-static const struct mbox_driver_api am26x_mbox_api = {
+static DEVICE_API(mbox, am26x_mbox_api) = {
 	.send = am26x_mbox_send,
 	.register_callback = am26x_mbox_register_callback,
 	.mtu_get = am26x_mbox_mtu_get,

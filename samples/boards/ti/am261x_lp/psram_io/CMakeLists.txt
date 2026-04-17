@@ -10,5 +10,5 @@ target_sources(app PRIVATE src/main.c)
 zephyr_code_relocate(FILES src/main.c LOCATION PSRAM_BSS FILTER ".*\\.psram_dst_data")
 
 if(CONFIG_TEST_EXECUTE_FROM_PSRAM)
-	zephyr_code_relocate(FILES src/main.c LOCATION PSRAM_TEXT)
+  zephyr_code_relocate(FILES src/main.c LOCATION PSRAM_TEXT)
 endif()

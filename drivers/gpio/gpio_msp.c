@@ -515,7 +515,7 @@ static int gpio_msp_port_get_direction(const struct device *port, gpio_port_pins
 }
 #endif /* CONFIG_GPIO_GET_DIRECTION */
 
-static const struct gpio_driver_api gpio_msp_driver_api = {
+static DEVICE_API(gpio, gpio_msp_driver_api) = {
 	.pin_configure = gpio_msp_pin_configure,
 #ifdef CONFIG_GPIO_GET_CONFIG
 	.pin_get_config = gpio_msp_pin_get_config,
