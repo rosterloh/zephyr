@@ -26,82 +26,7 @@
 LOG_MODULE_DECLARE(net_http_server, CONFIG_NET_HTTP_SERVER_LOG_LEVEL);
 
 #include "headers/server_internal.h"
-
-/* Huffman decoder from http_huffman.c (same table used by HPACK and QPACK) */
-int http_hpack_huffman_decode(const uint8_t *encoded_buf, size_t encoded_len,
-			      uint8_t *buf, size_t buflen);
-
-/* HTTP/3 frame types (RFC 9114 Section 7.2) */
-#define H3_FRAME_DATA           0x00
-#define H3_FRAME_HEADERS        0x01
-#define H3_FRAME_CANCEL_PUSH    0x03
-#define H3_FRAME_SETTINGS       0x04
-#define H3_FRAME_PUSH_PROMISE   0x05
-#define H3_FRAME_GOAWAY         0x07
-#define H3_FRAME_MAX_PUSH_ID    0x0d
-
-/* HTTP/3 Settings identifiers (RFC 9114 Section 7.2.4.1) */
-#define H3_SETTINGS_QPACK_MAX_TABLE_CAPACITY  0x01
-#define H3_SETTINGS_MAX_FIELD_SECTION_SIZE    0x06
-#define H3_SETTINGS_QPACK_BLOCKED_STREAMS     0x07
-
-/* HTTP/3 unidirectional stream types (RFC 9114 Section 6.2) */
-#define H3_UNI_STREAM_CONTROL        0x00
-#define H3_UNI_STREAM_PUSH           0x01
-#define H3_UNI_STREAM_QPACK_ENCODER  0x02
-#define H3_UNI_STREAM_QPACK_DECODER  0x03
-
-/* HTTP/3 error codes (RFC 9114 Section 8.1) */
-#define H3_NO_ERROR                  0x0100
-#define H3_GENERAL_PROTOCOL_ERROR    0x0101
-#define H3_INTERNAL_ERROR            0x0102
-#define H3_STREAM_CREATION_ERROR     0x0103
-#define H3_CLOSED_CRITICAL_STREAM    0x0104
-#define H3_FRAME_UNEXPECTED          0x0105
-#define H3_FRAME_ERROR               0x0106
-#define H3_EXCESSIVE_LOAD            0x0107
-#define H3_ID_ERROR                  0x0108
-#define H3_SETTINGS_ERROR            0x0109
-#define H3_MISSING_SETTINGS          0x010a
-#define H3_REQUEST_REJECTED          0x010b
-#define H3_REQUEST_CANCELLED         0x010c
-#define H3_REQUEST_INCOMPLETE        0x010d
-#define H3_MESSAGE_ERROR             0x010e
-#define H3_CONNECT_ERROR             0x010f
-#define H3_VERSION_FALLBACK          0x0110
-
-/* QPACK error codes (RFC 9204 Section 6) */
-#define QPACK_DECOMPRESSION_FAILED   0x0200
-#define QPACK_ENCODER_STREAM_ERROR   0x0201
-#define QPACK_DECODER_STREAM_ERROR   0x0202
-
-/* QPACK static table indices (RFC 9204 Appendix A) */
-#define QPACK_STATIC_AUTHORITY          0
-#define QPACK_STATIC_PATH_SLASH         1
-#define QPACK_STATIC_METHOD_CONNECT     15
-#define QPACK_STATIC_METHOD_DELETE      16
-#define QPACK_STATIC_METHOD_GET         17
-#define QPACK_STATIC_METHOD_HEAD        18
-#define QPACK_STATIC_METHOD_OPTIONS     19
-#define QPACK_STATIC_METHOD_POST        20
-#define QPACK_STATIC_METHOD_PUT         21
-#define QPACK_STATIC_SCHEME_HTTP        22
-#define QPACK_STATIC_SCHEME_HTTPS       23
-#define QPACK_STATIC_STATUS_200         25
-#define QPACK_STATIC_STATUS_304         26
-#define QPACK_STATIC_STATUS_404         27
-#define QPACK_STATIC_STATUS_425         70
-#define QPACK_STATIC_STATUS_503         28
-#define QPACK_STATIC_CONTENT_TYPE_HTML  52
-#define QPACK_STATIC_PATH_INDEX_HTML    63
-
-/* QPACK header field representation prefixes (RFC 9204 Section 4.5) */
-#define QPACK_INDEXED_STATIC         0xc0  /* 11xxxxxx: indexed, static table */
-#define QPACK_INDEXED_STATIC_MASK    0xc0
-#define QPACK_LIT_NAME_REF_STATIC    0x50  /* 0101xxxx: literal with name ref, static */
-#define QPACK_LIT_NAME_REF_MASK      0xf0
-#define QPACK_LIT_WITHOUT_NAME_REF   0x20  /* 001xxxxx: literal without name ref */
-#define QPACK_LIT_WITHOUT_NAME_MASK  0xe0
+#include "headers/http3_internal.h"
 
 /* Maximum size of an H3 response header block buffer.
  * 2 (QPACK prefix) + ~128 bytes of encoded headers should suffice.
@@ -116,121 +41,6 @@ int http_hpack_huffman_decode(const uint8_t *encoded_buf, size_t encoded_len,
 /* Maximum size of a Huffman decoded string */
 #define H3_HUFFMAN_DECODE_BUF_SIZE 256
 
-struct qpack_static_entry {
-	const char *name;
-	const char *value;
-};
-
-static const struct qpack_static_entry qpack_static_table[] = {
-	[0] = { .name = ":authority", .value = NULL },
-	[1] = { .name = ":path", .value = "/" },
-	[2] = { .name = "age", .value = "0" },
-	[3] = { .name = "content-disposition", .value = NULL },
-	[4] = { .name = "content-length", .value = "0" },
-	[5] = { .name = "cookie", .value = NULL },
-	[6] = { .name = "date", .value = NULL },
-	[7] = { .name = "etag", .value = NULL },
-	[8] = { .name = "if-modified-since", .value = NULL },
-	[9] = { .name = "if-none-match", .value = NULL },
-	[10] = { .name = "last-modified", .value = NULL },
-	[11] = { .name = "link", .value = NULL },
-	[12] = { .name = "location", .value = NULL },
-	[13] = { .name = "referer", .value = NULL },
-	[14] = { .name = "set-cookie", .value = NULL },
-	[15] = { .name = ":method", .value = "CONNECT" },
-	[16] = { .name = ":method", .value = "DELETE" },
-	[17] = { .name = ":method", .value = "GET" },
-	[18] = { .name = ":method", .value = "HEAD" },
-	[19] = { .name = ":method", .value = "OPTIONS" },
-	[20] = { .name = ":method", .value = "POST" },
-	[21] = { .name = ":method", .value = "PUT" },
-	[22] = { .name = ":scheme", .value = "http" },
-	[23] = { .name = ":scheme", .value = "https" },
-	[24] = { .name = ":status", .value = "103" },
-	[25] = { .name = ":status", .value = "200" },
-	[26] = { .name = ":status", .value = "304" },
-	[27] = { .name = ":status", .value = "404" },
-	[28] = { .name = ":status", .value = "503" },
-	[29] = { .name = "accept", .value = "*/*" },
-	[30] = { .name = "accept", .value = "application/dns-message" },
-	[31] = { .name = "accept-encoding", .value = "gzip, deflate, br" },
-	[32] = { .name = "accept-ranges", .value = "bytes" },
-	[33] = { .name = "access-control-allow-headers", .value = "cache-control" },
-	[34] = { .name = "access-control-allow-headers", .value = "content-type" },
-	[35] = { .name = "access-control-allow-origin", .value = "*" },
-	[36] = { .name = "cache-control", .value = "max-age=0" },
-	[37] = { .name = "cache-control", .value = "max-age=2592000" },
-	[38] = { .name = "cache-control", .value = "max-age=604800" },
-	[39] = { .name = "cache-control", .value = "no-cache" },
-	[40] = { .name = "cache-control", .value = "no-store" },
-	[41] = { .name = "cache-control", .value = "public, max-age=31536000" },
-	[42] = { .name = "content-encoding", .value = "br" },
-	[43] = { .name = "content-encoding", .value = "gzip" },
-	[44] = { .name = "content-type", .value = "application/dns-message" },
-	[45] = { .name = "content-type", .value = "application/javascript" },
-	[46] = { .name = "content-type", .value = "application/json" },
-	[47] = { .name = "content-type", .value = "application/x-www-form-urlencoded" },
-	[48] = { .name = "content-type", .value = "image/gif" },
-	[49] = { .name = "content-type", .value = "image/jpeg" },
-	[50] = { .name = "content-type", .value = "image/png" },
-	[51] = { .name = "content-type", .value = "text/css" },
-	[52] = { .name = "content-type", .value = "text/html; charset=utf-8" },
-	[53] = { .name = "content-type", .value = "text/plain" },
-	[54] = { .name = "content-type", .value = "text/plain;charset=utf-8" },
-	[55] = { .name = "range", .value = "bytes=0-" },
-	[56] = { .name = "strict-transport-security", .value = "max-age=31536000" },
-	[57] = {
-		.name = "strict-transport-security",
-		.value = "max-age=31536000; includesubdomains",
-	},
-	[58] = {
-		.name = "strict-transport-security",
-		.value = "max-age=31536000; includesubdomains; preload",
-	},
-	[59] = { .name = "vary", .value = "accept-encoding" },
-	[60] = { .name = "vary", .value = "origin" },
-	[61] = { .name = "x-content-type-options", .value = "nosniff" },
-	[62] = { .name = "x-xss-protection", .value = "1; mode=block" },
-	[63] = { .name = ":status", .value = "100" },
-	[64] = { .name = ":status", .value = "204" },
-	[65] = { .name = ":status", .value = "206" },
-	[66] = { .name = ":status", .value = "302" },
-	[67] = { .name = ":status", .value = "400" },
-	[68] = { .name = ":status", .value = "403" },
-	[69] = { .name = ":status", .value = "421" },
-	[70] = { .name = ":status", .value = "425" },
-	[71] = { .name = ":status", .value = "500" },
-	[72] = { .name = "accept-language", .value = NULL },
-	[73] = { .name = "access-control-allow-credentials", .value = "FALSE" },
-	[74] = { .name = "access-control-allow-credentials", .value = "TRUE" },
-	[75] = { .name = "access-control-allow-headers", .value = "*" },
-	[76] = { .name = "access-control-allow-methods", .value = "get" },
-	[77] = { .name = "access-control-allow-methods", .value = "get, post, options" },
-	[78] = { .name = "access-control-allow-methods", .value = "options" },
-	[79] = { .name = "access-control-expose-headers", .value = "content-length" },
-	[80] = { .name = "access-control-request-headers", .value = "content-type" },
-	[81] = { .name = "access-control-request-method", .value = "get" },
-	[82] = { .name = "access-control-request-method", .value = "post" },
-	[83] = { .name = "alt-svc", .value = "clear" },
-	[84] = { .name = "authorization", .value = NULL },
-	[85] = {
-		.name = "content-security-policy",
-		.value = "script-src 'none'; object-src 'none'; base-uri 'none'",
-	},
-	[86] = { .name = "early-data", .value = "1" },
-	[87] = { .name = "expect-ct", .value = NULL },
-	[88] = { .name = "forwarded", .value = NULL },
-	[89] = { .name = "if-range", .value = NULL },
-	[90] = { .name = "origin", .value = NULL },
-	[91] = { .name = "purpose", .value = "prefetch" },
-	[92] = { .name = "server", .value = NULL },
-	[93] = { .name = "timing-allow-origin", .value = "*" },
-	[94] = { .name = "upgrade-insecure-requests", .value = "1" },
-	[95] = { .name = "user-agent", .value = NULL },
-	[96] = { .name = "x-forwarded-for", .value = NULL },
-	[97] = { .name = "x-frame-options", .value = "deny" },
-	[98] = { .name = "x-frame-options", .value = "sameorigin" },
-};
 
 /* Per-connection H3 context (simplified: indexed by slot) */
 static struct h3_conn_ctx h3_conn_contexts[CONFIG_HTTP_SERVER_MAX_CLIENTS];
@@ -430,249 +240,6 @@ static int h3_recv_peer_uni_stream_data(struct h3_uni_stream_rx_ctx *rx_ctx, int
 	return (int)len;
 }
 
-/**
- * Parse a QUIC variable-length integer (RFC 9000 Section 16).
- *
- * @param buf    Input buffer.
- * @param buflen Available bytes in buffer.
- * @param value  Output: parsed integer value.
- *
- * @return Number of bytes consumed, or -EINVAL on error.
- */
-static int h3_parse_varint(const uint8_t *buf, size_t buflen, uint64_t *value)
-{
-	uint8_t prefix;
-	int len;
-
-	if (buflen == 0) {
-		return -EINVAL;
-	}
-
-	prefix = buf[0] >> 6;
-	len = 1 << prefix;
-
-	if ((size_t)len > buflen) {
-		return -EINVAL;
-	}
-
-	*value = buf[0] & (0x3f);
-
-	for (int i = 1; i < len; i++) {
-		*value = (*value << 8) | buf[i];
-	}
-
-	return len;
-}
-
-/**
- * Encode a QUIC variable-length integer (RFC 9000 Section 16).
- *
- * @param buf    Output buffer.
- * @param buflen Available space.
- * @param value  Value to encode.
- *
- * @return Number of bytes written, or <0 on error.
- */
-static int h3_encode_varint(uint8_t *buf, size_t buflen, uint64_t value)
-{
-	if (value <= 0x3f) {
-		if (buflen < 1) {
-			return -ENOSPC;
-		}
-
-		buf[0] = (uint8_t)value;
-		return 1;
-	}
-
-	if (value <= 0x3fff) {
-		if (buflen < 2) {
-			return -ENOSPC;
-		}
-
-		buf[0] = (uint8_t)((value >> 8) | 0x40);
-		buf[1] = (uint8_t)(value & 0xff);
-		return 2;
-	}
-
-	if (value <= 0x3fffffff) {
-		if (buflen < 4) {
-			return -ENOSPC;
-		}
-
-		buf[0] = (uint8_t)((value >> 24) | 0x80);
-		buf[1] = (uint8_t)((value >> 16) & 0xff);
-		buf[2] = (uint8_t)((value >> 8) & 0xff);
-		buf[3] = (uint8_t)(value & 0xff);
-		return 4;
-	}
-
-	if (buflen < 8) {
-		return -ENOSPC;
-	}
-
-	buf[0] = (uint8_t)((value >> 56) | 0xc0);
-	buf[1] = (uint8_t)((value >> 48) & 0xff);
-	buf[2] = (uint8_t)((value >> 40) & 0xff);
-	buf[3] = (uint8_t)((value >> 32) & 0xff);
-	buf[4] = (uint8_t)((value >> 24) & 0xff);
-	buf[5] = (uint8_t)((value >> 16) & 0xff);
-	buf[6] = (uint8_t)((value >> 8) & 0xff);
-	buf[7] = (uint8_t)(value & 0xff);
-	return 8;
-}
-
-/**
- * Parse an HTTP/3 frame header (type + length).
- *
- * @param buf       Input buffer.
- * @param buflen    Available bytes.
- * @param type      Output: frame type.
- * @param frame_len Output: frame payload length.
- *
- * @return Number of bytes consumed by the frame header, or <0 on error.
- */
-static int h3_parse_frame_header(const uint8_t *buf, size_t buflen,
-				 uint64_t *type, uint64_t *frame_len)
-{
-	int consumed = 0;
-	int ret;
-
-	ret = h3_parse_varint(buf, buflen, type);
-	if (ret < 0) {
-		return ret;
-	}
-
-	consumed += ret;
-
-	ret = h3_parse_varint(buf + consumed, buflen - consumed, frame_len);
-	if (ret < 0) {
-		return ret;
-	}
-
-	consumed += ret;
-
-	return consumed;
-}
-
-/**
- * Decode a QPACK integer with the given prefix length.
- *
- * @param buf       Input buffer.
- * @param buflen    Available bytes.
- * @param prefix_n  Number of prefix bits (e.g. 6, 4, 3).
- * @param value     Output: decoded integer.
- *
- * @return Number of bytes consumed, or <0 on error.
- */
-ZTESTABLE_STATIC int qpack_decode_int(const uint8_t *buf, size_t buflen,
-				      int prefix_n, uint64_t *value)
-{
-	uint8_t max_first;
-	int consumed;
-	uint64_t shift;
-	uint8_t b;
-
-	if (buflen == 0) {
-		return -EINVAL;
-	}
-
-	max_first = (1 << prefix_n) - 1;
-	*value = buf[0] & max_first;
-	consumed = 1;
-
-	if (*value < max_first) {
-		return consumed;
-	}
-
-	/* Multi-byte integer */
-	shift = 0;
-
-	do {
-		if (consumed >= (int)buflen) {
-			return -EINVAL;
-		}
-
-		/* Nine continuation bytes carry 63 bits, which cannot overflow the
-		 * accumulator. Anything longer is too large to be a valid length or
-		 * index, so reject it rather than let the value wrap.
-		 */
-		if (shift > 56U) {
-			return -EBADMSG;
-		}
-
-		b = buf[consumed];
-		*value += (uint64_t)(b & 0x7f) << shift;
-		shift += 7;
-		consumed++;
-	} while (b & 0x80);
-
-	return consumed;
-}
-
-/**
- * Encode a QPACK integer with the given prefix.
- *
- * @param buf       Output buffer.
- * @param buflen    Available space.
- * @param prefix_n  Number of prefix bits.
- * @param prefix    Prefix byte (high bits already set).
- * @param value     Value to encode.
- *
- * @return Number of bytes written, or <0 on error.
- */
-ZTESTABLE_STATIC int qpack_encode_int(uint8_t *buf, size_t buflen,
-				      int prefix_n, uint8_t prefix, uint64_t value)
-{
-	uint8_t max_first;
-	int pos = 0;
-
-	if (buflen == 0) {
-		return -ENOSPC;
-	}
-
-	max_first = (1 << prefix_n) - 1;
-
-	if (value < max_first) {
-		buf[0] = prefix | (uint8_t)value;
-		return 1;
-	}
-
-	buf[pos++] = prefix | max_first;
-	value -= max_first;
-
-	while (value >= 128) {
-		if (pos >= (int)buflen) {
-			return -ENOSPC;
-		}
-
-		buf[pos++] = (uint8_t)(0x80 | (value & 0x7f));
-		value >>= 7;
-	}
-
-	if (pos >= (int)buflen) {
-		return -ENOSPC;
-	}
-
-	buf[pos++] = (uint8_t)value;
-
-	return pos;
-}
-
-static int qpack_static_entry_get(uint64_t index,
-				  const struct qpack_static_entry **entry)
-{
-	if (index >= ARRAY_SIZE(qpack_static_table)) {
-		return -ENOENT;
-	}
-
-	*entry = &qpack_static_table[index];
-
-	if ((*entry)->name == NULL) {
-		return -ENOENT;
-	}
-
-	return 0;
-}
 
 static void h3_capture_request_header(struct http_header_capture_ctx *ctx,
 				      const char *name, size_t name_len,
@@ -1043,13 +610,13 @@ static int h3_send_headers_frame(struct http_client_ctx *client,
 	}
 
 	/* Encode frame header: type=HEADERS(0x01), length=header_len */
-	frame_hdr_len = h3_encode_varint(frame_buf, sizeof(frame_buf),
+	frame_hdr_len = http3_varint_encode(frame_buf, sizeof(frame_buf),
 					 H3_FRAME_HEADERS);
 	if (frame_hdr_len < 0) {
 		return frame_hdr_len;
 	}
 
-	ret = h3_encode_varint(frame_buf + frame_hdr_len,
+	ret = http3_varint_encode(frame_buf + frame_hdr_len,
 			       sizeof(frame_buf) - frame_hdr_len,
 			       header_len);
 	if (ret < 0) {
@@ -1096,13 +663,13 @@ static int h3_send_data_frame(struct http_client_ctx *client,
 	int ret;
 
 	/* Encode frame header: type=DATA(0x00), length */
-	frame_hdr_len = h3_encode_varint(frame_hdr, sizeof(frame_hdr),
+	frame_hdr_len = http3_varint_encode(frame_hdr, sizeof(frame_hdr),
 					 H3_FRAME_DATA);
 	if (frame_hdr_len < 0) {
 		return frame_hdr_len;
 	}
 
-	ret = h3_encode_varint(frame_hdr + frame_hdr_len,
+	ret = http3_varint_encode(frame_hdr + frame_hdr_len,
 			       sizeof(frame_hdr) - frame_hdr_len,
 			       length);
 	if (ret < 0) {
@@ -2070,7 +1637,7 @@ static int h3_parse_settings(struct http_client_ctx *client,
 	/* Parse identifier-value pairs */
 	while (pos < buflen) {
 		/* Parse identifier (varint) */
-		ret = h3_parse_varint(buf + pos, buflen - pos, &identifier);
+		ret = http3_varint_decode(buf + pos, buflen - pos, &identifier);
 		if (ret < 0) {
 			LOG_DBG("[%p] H3: Failed to parse SETTINGS identifier", client);
 			return -H3_SETTINGS_ERROR;
@@ -2084,7 +1651,7 @@ static int h3_parse_settings(struct http_client_ctx *client,
 		}
 
 		/* Parse value (varint) */
-		ret = h3_parse_varint(buf + pos, buflen - pos, &value);
+		ret = http3_varint_decode(buf + pos, buflen - pos, &value);
 		if (ret < 0) {
 			LOG_DBG("[%p] H3: Failed to parse SETTINGS value", client);
 			return -H3_SETTINGS_ERROR;
@@ -2143,7 +1710,7 @@ static int h3_send_settings(struct http_client_ctx *client, int fd)
 	int ret;
 
 	/* Frame type: SETTINGS (0x04) */
-	ret = h3_encode_varint(buf + pos, sizeof(buf) - pos, H3_FRAME_SETTINGS);
+	ret = http3_varint_encode(buf + pos, sizeof(buf) - pos, H3_FRAME_SETTINGS);
 	if (ret < 0) {
 		return ret;
 	}
@@ -2156,28 +1723,28 @@ static int h3_send_settings(struct http_client_ctx *client, int fd)
 	payload_start = pos;
 
 	/* QPACK_MAX_TABLE_CAPACITY = 0 (disable dynamic table) */
-	ret = h3_encode_varint(buf + pos, sizeof(buf) - pos,
+	ret = http3_varint_encode(buf + pos, sizeof(buf) - pos,
 			       H3_SETTINGS_QPACK_MAX_TABLE_CAPACITY);
 	if (ret < 0) {
 		return ret;
 	}
 	pos += ret;
 
-	ret = h3_encode_varint(buf + pos, sizeof(buf) - pos, 0);
+	ret = http3_varint_encode(buf + pos, sizeof(buf) - pos, 0);
 	if (ret < 0) {
 		return ret;
 	}
 	pos += ret;
 
 	/* QPACK_BLOCKED_STREAMS = 0 */
-	ret = h3_encode_varint(buf + pos, sizeof(buf) - pos,
+	ret = http3_varint_encode(buf + pos, sizeof(buf) - pos,
 			       H3_SETTINGS_QPACK_BLOCKED_STREAMS);
 	if (ret < 0) {
 		return ret;
 	}
 	pos += ret;
 
-	ret = h3_encode_varint(buf + pos, sizeof(buf) - pos, 0);
+	ret = http3_varint_encode(buf + pos, sizeof(buf) - pos, 0);
 	if (ret < 0) {
 		return ret;
 	}
@@ -2246,7 +1813,7 @@ int h3_handle_control_stream(struct http_client_ctx *client, int fd)
 	while (pos < rx_ctx->data_len) {
 		int hdr_bytes;
 
-		ret = h3_parse_frame_header(rx_ctx->buffer + pos,
+		ret = http3_frame_header_parse(rx_ctx->buffer + pos,
 					    rx_ctx->data_len - pos,
 					    &frame_type, &frame_len);
 		if (ret < 0) {
@@ -2589,7 +2156,7 @@ int h3_identify_uni_stream(struct http_client_ctx *client, int fd)
 		return -ECONNRESET;
 	}
 
-	ret = h3_parse_varint(buf, len, &stream_type);
+	ret = http3_varint_decode(buf, len, &stream_type);
 	if (ret < 0) {
 		LOG_DBG("[%p] H3: Failed to parse uni stream type", client);
 		return ret;
@@ -2709,7 +2276,7 @@ static int h3_process_frames(struct http_client_ctx *client, bool stream_fin)
 		int hdr_bytes;
 		int ret;
 
-		hdr_bytes = h3_parse_frame_header(client->buffer + pos,
+		hdr_bytes = http3_frame_header_parse(client->buffer + pos,
 						  client->data_len - pos,
 						  &frame_type, &frame_len);
 		if (hdr_bytes < 0) {

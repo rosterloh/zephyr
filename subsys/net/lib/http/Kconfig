@@ -38,7 +38,7 @@ config HTTP_HUFFMAN_DECODE_BUFFER_SIZE
 		if HTTP_SERVER && HTTP_SERVER_HUFFMAN_DECODE_BUFFER_SIZE != 0
 	default 256
 	range 64 $(UINT32_MAX)
-	depends on HTTP2_COMMON || HTTP_SERVER_VERSION_3
+	depends on HTTP2_COMMON || HTTP3_COMMON
 	help
 	  Size of the buffer used for decoding Huffman-encoded strings in
 	  HPACK (HTTP/2) and QPACK (HTTP/3) compressed headers. This
@@ -265,6 +265,7 @@ config HTTP_SERVER_VERSION_3
 	bool "HTTP/3 support"
 	depends on QUIC
 	select NET_SOCKETS_SOCKOPT_TLS
+	select HTTP3_COMMON
 	default y
 	help
 	  Support HTTP/3 version. This depends on QUIC transport protocol support.
@@ -507,6 +508,10 @@ endif
 
 # Hidden option for the HTTP/2 frame and HPACK code shared by server and client
 config HTTP2_COMMON
+	bool
+
+# Hidden option for the HTTP/3 frame and QPACK code shared by server and client
+config HTTP3_COMMON
 	bool
 
 # Hidden option to avoid having multiple individual options that are ORed together
