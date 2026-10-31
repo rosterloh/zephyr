@@ -80,7 +80,7 @@ static const struct http_client_ops *http_client_get_ops(enum http_client_versio
 		ops = http_client_get_http2_ops();
 		break;
 	case HTTP_CLIENT_VERSION_3:
-		ops = NULL; /* Placeholder for future implementation */
+		ops = http_client_get_http3_ops();
 		break;
 	default:
 		ops = NULL;

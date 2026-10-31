@@ -83,7 +83,7 @@ config HTTP_CLIENT_MULTIPROTOCOL
 	select EXPERIMENTAL
 	help
 	  HTTP client API designed to carry HTTP/1.1, HTTP/2 and HTTP/3 over
-	  pluggable transports. Only HTTP/2 is implemented so far.
+	  pluggable transports. HTTP/2 and HTTP/3 are implemented so far.
 
 if HTTP_CLIENT_MULTIPROTOCOL
 
@@ -91,9 +91,9 @@ config HTTP_CLIENT_MAX_INSTANCES
 	int "Maximum number of concurrent asynchronous sessions"
 	default 1
 	range 1 $(UINT8_MAX)
-	depends on HTTP_CLIENT_TRANSPORT_TCP
+	depends on HTTP_CLIENT_TRANSPORT_TCP || HTTP_CLIENT_VERSION_3
 	help
-	  Maximum number of asynchronous sessions the TCP and TLS transports
+	  Maximum number of asynchronous sessions the TCP, TLS and QUIC transports
 	  can serve at a time, each taking a socket service slot. Synchronous
 	  sessions and application transports are not counted.
 
@@ -132,8 +132,9 @@ config HTTP_CLIENT_TX_BUFFER_SIZE
 	range 64 $(UINT16_MAX)
 	help
 	  Size of the per-session transmit buffer used to encode request
-	  headers. A header block larger than the buffer is sent as several
-	  frames, so the size only bounds a single header field.
+	  headers. Over HTTP/2 a header block larger than the buffer is sent as
+	  several frames, so the size only bounds a single header field. Over
+	  HTTP/3 the whole field section of a request has to fit.
 
 config HTTP_CLIENT_HEADERS_BUFFER_SIZE
 	int "HTTP client headers buffer size"
@@ -167,9 +168,9 @@ config HTTP_CLIENT_SEND_TIMEOUT
 	int "Send timeout for the socket transports (milliseconds)"
 	default 10000
 	range 1 $(INT32_MAX)
-	depends on HTTP_CLIENT_TRANSPORT_TCP
+	depends on HTTP_CLIENT_TRANSPORT_TCP || HTTP_CLIENT_VERSION_3
 	help
-	  Maximum time a single send on the TCP or TLS transport may block
+	  Maximum time a single send on the TCP, TLS or QUIC transport may block
 	  before the session is ended. Bounds how long a peer that stops
 	  reading can stall a thread sending a request, or the receive context
 	  of an asynchronous session sending a control frame.
@@ -208,8 +209,28 @@ config HTTP_CLIENT_VERSION_2
 	select HTTP2_COMMON
 	default y
 	help
-	  HTTP/2 support in the HTTP client. Always enabled, as it is the only
-	  protocol version implemented.
+	  HTTP/2 support in the HTTP client. Always enabled.
+
+config HTTP_CLIENT_VERSION_3
+	bool "HTTP/3 support"
+	depends on QUIC
+	select HTTP3_COMMON
+	default y
+	help
+	  HTTP/3 support in the HTTP client, with the QUIC transport it runs
+	  on. The client keeps no QPACK dynamic table, so it opens no QPACK
+	  streams and the server has to send its fields literally or from the
+	  static table.
+
+config HTTP_CLIENT_HTTP3_PEER_UNI_STREAMS
+	int "Unidirectional streams the server may open"
+	depends on HTTP_CLIENT_VERSION_3
+	default 4
+	range 3 16
+	help
+	  Number of unidirectional streams the server may have open at a time:
+	  its control stream, the two QPACK streams and any of an unknown type,
+	  which are refused once their type is read.
 
 config HTTP_CLIENT_HTTP2_WINDOW_SIZE
 	int "HTTP/2 receive window size"

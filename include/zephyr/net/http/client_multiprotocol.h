@@ -17,7 +17,7 @@
  * @brief Multiprotocol HTTP client API
  *
  * An HTTP client API designed to carry HTTP/1.1, HTTP/2 and HTTP/3 over
- * pluggable transports. Only HTTP/2 is implemented so far.
+ * pluggable transports. HTTP/2 and HTTP/3 are implemented so far.
  *
  * @defgroup http_client_multiprotocol Multiprotocol HTTP client API
  * @since 4.6
@@ -53,6 +53,19 @@ extern "C" {
 #define HTTP_CLIENT_TX_BUFFER_SIZE 1
 #define HTTP_CLIENT_MAX_CONTENT_TYPE_LEN 1
 #endif
+
+#if defined(CONFIG_HTTP_CLIENT_VERSION_3)
+#define HTTP3_CLIENT_PEER_UNI_STREAMS CONFIG_HTTP_CLIENT_HTTP3_PEER_UNI_STREAMS
+#define HTTP3_CLIENT_HUFFMAN_BUF_SIZE CONFIG_HTTP_HUFFMAN_DECODE_BUFFER_SIZE
+#else
+#define HTTP3_CLIENT_PEER_UNI_STREAMS 1
+#define HTTP3_CLIENT_HUFFMAN_BUF_SIZE 1
+#endif
+
+/* QUIC streams of a session: the requests, the client's HTTP/3 control
+ * stream and the unidirectional streams of the server.
+ */
+#define HTTP_CLIENT_QUIC_MAX_STREAMS (HTTP_CLIENT_MAX_STREAMS + 1 + HTTP3_CLIENT_PEER_UNI_STREAMS)
 
 /** @endcond */
 
@@ -225,6 +238,85 @@ struct http2_client_parser {
 	struct http2_client_deferred deferred;
 };
 
+/** HTTP/3 frame parser state of one stream. A frame may span several
+ *  receptions, and other streams may be read in between.
+ */
+struct http3_client_rx {
+	/** Whether a frame payload is being received. */
+	bool in_frame;
+
+	/** Type of the frame being received. */
+	uint64_t type;
+
+	/** Payload bytes of the frame still to come. */
+	uint64_t remaining;
+};
+
+/** HTTP/3 request stream state. */
+struct http3_client_stream {
+	/** Frame parser state. */
+	struct http3_client_rx rx;
+
+	/** Body bytes received so far, checked against content-length. */
+	size_t body_received;
+
+	/** Whether the field section being received holds :status already. */
+	bool status_seen;
+
+	/** Whether the field section being received holds a regular field already. */
+	bool regular_field_seen;
+
+	/** Whether the prefix of the field section being received was read. */
+	bool prefix_seen;
+
+	/** Write cursor (offset from the end) for response header strings packed
+	 *  into the stream headers buffer while a field section is decoded.
+	 */
+	size_t rx_headers_str_top;
+};
+
+/** A unidirectional stream opened by the server. */
+struct http3_client_uni_stream {
+	/** Transport stream, NULL when the slot is free. */
+	void *transport_stream;
+
+	/** Whether the stream type was read. */
+	bool typed;
+
+	/** Stream type. */
+	uint64_t type;
+
+	/** Frame parser state, for the control stream. */
+	struct http3_client_rx rx;
+};
+
+/** HTTP/3 session state. */
+struct http3_client_parser {
+	/** The client's control stream. */
+	void *control_stream;
+
+	/** Unidirectional streams of the server. */
+	struct http3_client_uni_stream peer[HTTP3_CLIENT_PEER_UNI_STREAMS];
+
+	/** Whether the server's control stream was seen. */
+	bool control_seen;
+
+	/** Whether the server's SETTINGS frame was received. */
+	bool settings_received;
+
+	/** Whether the server announced that it accepts no new requests. */
+	bool going_away;
+
+	/** First request stream the server's GOAWAY leaves unprocessed. */
+	uint64_t goaway_id;
+
+	/** Largest field section the server accepts, UINT64_MAX if unlimited. */
+	uint64_t peer_max_field_section_size;
+
+	/** Scratch space for decoding Huffman-coded field strings. */
+	uint8_t huffman_buf[HTTP3_CLIENT_HUFFMAN_BUF_SIZE];
+};
+
 /** @endcond */
 
 /** HTTP protocol version */
@@ -356,6 +448,43 @@ struct http_client_transport_ops {
 	 * @return 0 on success, a negative errno code otherwise.
 	 */
 	int (*close)(struct http_client *client);
+
+	/** @brief Open a stream of a multi-stream transport
+	 *
+	 * Required by protocols running over several streams (HTTP/3), NULL
+	 * on a single-stream transport.
+	 *
+	 * @param client HTTP client instance
+	 * @param bidirectional Whether the peer may send on the stream as well
+	 * @param stream The stream opened
+	 *
+	 * @return 0 on success, a negative errno code otherwise.
+	 */
+	int (*stream_open)(struct http_client *client, bool bidirectional, void **stream);
+
+	/** @brief Close a stream of a multi-stream transport
+	 *
+	 * Ends the sending side if that is not done yet and tells the peer
+	 * that nothing more is read. NULL on a single-stream transport.
+	 *
+	 * @param client HTTP client instance
+	 * @param stream The stream to close
+	 * @param error Protocol error code to give the peer for anything left
+	 *              unread or unsent, e. g. in a QUIC STOP_SENDING frame
+	 */
+	void (*stream_close)(struct http_client *client, void *stream, uint64_t error);
+
+	/** @brief Identifier of a stream of a multi-stream transport
+	 *
+	 * NULL on a single-stream transport.
+	 *
+	 * @param client HTTP client instance
+	 * @param stream The stream
+	 * @param id The transport's identifier of the stream, a QUIC stream ID
+	 *
+	 * @return 0 on success, a negative errno code otherwise.
+	 */
+	int (*stream_id)(struct http_client *client, void *stream, uint64_t *id);
 };
 
 /** @brief Notify HTTP client about a transport reception event
@@ -502,6 +631,36 @@ struct http_client_transport_tls_ctx {
 
 	/** TLS configuration. */
 	struct http_client_transport_tls_config config;
+};
+
+/** @cond INTERNAL_HIDDEN */
+
+/** A stream of the QUIC transport. */
+struct http_client_transport_quic_stream {
+	/** QUIC stream socket, -1 when the slot is free. */
+	int sock;
+
+	/** Whether the peer sends nothing on the stream. */
+	bool send_only;
+
+	/** Whether the end of the stream was reported. */
+	bool eof;
+};
+
+/** @endcond */
+
+/** QUIC transport context for the HTTP client */
+struct http_client_transport_quic_ctx {
+	/** QUIC connection socket in use, managed by the transport. */
+	int sock;
+
+	/** TLS configuration of the connection. Only the security tags, the
+	 *  hostname, the cipher list and cert_nocopy apply.
+	 */
+	struct http_client_transport_tls_config config;
+
+	/** Streams of the connection, managed by the transport. */
+	struct http_client_transport_quic_stream streams[HTTP_CLIENT_QUIC_MAX_STREAMS];
 };
 
 /**
@@ -652,6 +811,9 @@ struct http_client_stream {
 	union {
 		/** HTTP/2 stream state. */
 		struct http2_client_stream http2;
+
+		/** HTTP/3 stream state. */
+		struct http3_client_stream http3;
 	} proto;
 
 	/** Buffer backing the response header array and strings delivered to the
@@ -740,6 +902,9 @@ struct http_client_session {
 	union {
 		/** HTTP/2 parser context. */
 		struct http2_client_parser http2;
+
+		/** HTTP/3 parser context. */
+		struct http3_client_parser http3;
 	} parser;
 };
 
@@ -752,7 +917,7 @@ struct http_client_session_config {
 	net_socklen_t addrlen;
 
 	/** Server host name, IPv4 literal or bracketed IPv6 literal, without
-	 *  a port, used for the :authority pseudo-header (HTTP/2) and the Host
+	 *  a port, used for the :authority pseudo-header (HTTP/2, HTTP/3) and the Host
 	 *  header (HTTP/1.1). The port is taken from the server address. Leave
 	 *  NULL to use the server address literal instead. Must remain valid
 	 *  for the lifetime of the session.
@@ -852,6 +1017,23 @@ int http_client_init_tcp(struct http_client *client, enum http_client_version ve
  */
 int http_client_init_tls(struct http_client *client, enum http_client_version version,
 			 struct http_client_transport_tls_ctx *transport_ctx);
+
+/** @brief Initialize HTTP client with QUIC transport
+ *
+ * Available when @kconfig{CONFIG_HTTP_CLIENT_VERSION_3} is enabled. Only
+ * HTTP/3 runs over QUIC. The transport opens a QUIC connection, applies the
+ * TLS configuration from the context and advertises HTTP/3 via ALPN. The
+ * handshake runs when the session is opened. See http_client_init() for
+ * reinitializing a client.
+ *
+ * @param client HTTP client instance
+ * @param transport_ctx A pointer to the QUIC transport context
+ *
+ * @retval 0 Success
+ * @retval -EINVAL Invalid argument
+ */
+int http_client_init_quic(struct http_client *client,
+			  struct http_client_transport_quic_ctx *transport_ctx);
 
 /** @brief Connect HTTP client to a HTTP server
  *

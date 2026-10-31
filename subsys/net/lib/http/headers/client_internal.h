@@ -78,6 +78,12 @@ const struct http_client_ops *http_client_get_http2_ops(void);
 static inline const struct http_client_ops *http_client_get_http2_ops(void) { return NULL; }
 #endif
 
+#if defined(CONFIG_HTTP_CLIENT_VERSION_3)
+const struct http_client_ops *http_client_get_http3_ops(void);
+#else
+static inline const struct http_client_ops *http_client_get_http3_ops(void) { return NULL; }
+#endif
+
 /* Look up an active stream by its protocol stream identifier. A completed
  * stream is not found, even while it waits to be released. Returns NULL if no
  * matching stream exists. Must be called with the client lock held.
@@ -200,5 +206,20 @@ bool http_client_field_is_connection_specific(const char *name, size_t name_len)
  * address, with no port.
  */
 bool http_client_host_is_valid(const char *host);
+
+/* A decoded HTTP/3 field line; the strings are not NUL-terminated. */
+struct h3_field {
+	const char *name;
+	size_t name_len;
+	const char *value;
+	size_t value_len;
+};
+
+#if defined(CONFIG_ZTEST) && defined(CONFIG_HTTP_CLIENT_VERSION_3)
+/* QPACK field lines without a dynamic table, exposed for the tests. */
+int qpack_encode_field(uint8_t *buf, size_t buflen, const char *name, const char *value);
+int qpack_decode_field(const uint8_t *buf, size_t buflen, struct h3_field *field,
+		       uint8_t *scratch, size_t scratch_len);
+#endif
 
 #endif /* HTTP_CLIENT_INTERNAL_H_ */
