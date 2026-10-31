@@ -87,7 +87,8 @@ New APIs and options
 
   * Multiprotocol HTTP client (:kconfig:option:`CONFIG_HTTP_CLIENT_MULTIPROTOCOL`),
     a new client API meant to cover HTTP/1.1, HTTP/2 and HTTP/3. HTTP/2 over TCP
-    and TLS is supported in this release.
+    and TLS, and HTTP/3 over QUIC (:kconfig:option:`CONFIG_HTTP_CLIENT_VERSION_3`),
+    are supported in this release.
 
 .. zephyr-keep-sorted-stop
 

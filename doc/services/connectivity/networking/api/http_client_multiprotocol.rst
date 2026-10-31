@@ -13,14 +13,14 @@ Overview
 The multiprotocol HTTP client sends HTTP requests and delivers the responses to
 the application through a callback, with the HTTP version chosen when the client
 is initialized. It is meant to cover HTTP/1.1, HTTP/2 and HTTP/3 behind one API
-and to replace the :ref:`HTTP client <http_client_interface>` eventually. Only
-HTTP/2 is implemented so far.
+and to replace the :ref:`HTTP client <http_client_interface>` eventually.
+HTTP/2 and HTTP/3 are implemented so far.
 
 Unlike the HTTP/1.1-only client, this client owns the connection: a session is
 opened once with :c:func:`http_client_connect` and carries any number of
-requests, several at a time over HTTP/2. The bytes are carried by a transport
-layer; TCP and TLS transports are provided, and an application may supply its
-own by implementing :c:struct:`http_client_transport_ops`.
+requests, several at a time over HTTP/2 and HTTP/3. The bytes are carried by a
+transport layer; TCP, TLS and QUIC transports are provided, and an application
+may supply its own by implementing :c:struct:`http_client_transport_ops`.
 
 It is enabled with the :kconfig:option:`CONFIG_HTTP_CLIENT_MULTIPROTOCOL`
 Kconfig option. The library is experimental.
@@ -68,6 +68,12 @@ Over HTTP/2 the server never has more response data in flight than the
 :kconfig:option:`CONFIG_HTTP_CLIENT_HTTP2_WINDOW_SIZE` window the client grants
 it, so on a fast link the window should be at least as large as the TCP receive
 window.
+
+Over HTTP/3 a request's whole field section has to fit
+:kconfig:option:`CONFIG_HTTP_CLIENT_TX_BUFFER_SIZE`, as an HTTP/3 HEADERS frame
+cannot be continued. The client keeps no QPACK dynamic table, so it sends and
+accepts field lines from the static table or literally only, and opens no QPACK
+streams.
 
 The request target is a path, with the query if any. Absolute URLs and the
 CONNECT method are not supported.
@@ -134,6 +140,11 @@ For HTTPS, the client is initialized with :c:func:`http_client_init_tls` and a
 optionally, the host name to send as the TLS server name and verify the
 certificate against; by default it is the session host, when that is a domain
 name. The transport negotiates the HTTP version through ALPN.
+
+For HTTP/3, enable :kconfig:option:`CONFIG_QUIC` and initialize the client with
+:c:func:`http_client_init_quic` and a :c:struct:`http_client_transport_quic_ctx`
+carrying the same TLS configuration. The QUIC handshake runs in
+:c:func:`http_client_connect`.
 
 A request body is given either in one piece, in which case the client sends a
 Content-Length header, or through a :c:type:`http_client_payload_cb_t` that
