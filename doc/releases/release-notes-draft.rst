@@ -140,6 +140,8 @@ Libraries / Subsystems
   * HTTP server: HTTPS services no longer run the TLS handshake inside ``accept()``. A client that
     opens a connection and then stalls its handshake used to stop the whole server, HTTP services
     included, for up to :kconfig:option:`CONFIG_NET_SOCKETS_TLS_CONNECT_TIMEOUT` per connection.
+  * The multiprotocol HTTP client (:ref:`http_client_multiprotocol_interface`) supports
+    HTTP/3 over QUIC (:kconfig:option:`CONFIG_HTTP_CLIENT_VERSION_3`), next to HTTP/2.
   * The native network stack runs its protocol timers and deferred work on a dedicated work queue
     instead of the system work queue, so that a slow system work queue item no longer delays DHCP,
     Neighbor Discovery, address conflict detection or DNS timeouts, and the stack no longer holds
